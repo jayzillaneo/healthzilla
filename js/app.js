@@ -42,19 +42,39 @@ const D = () => S.data || { sessions: [], sets: [], meals: [], goals: [], metric
 const isJahan = () => S.user?.id === 'jahan';
 const hasPlan = () => isJahan() || S.user?.planStatus === 'plan ready';
 function cacheSave() { LS.set('cache:' + S.user.id, S.data); }
+const byKey = (arr, f) => { const m = new Map(); for (const x of arr || []) m.set(f(x), x); return [...m.values()]; };
 async function loadData() {
-  S.data = LS.get('cache:' + S.user.id, null);
+  const cached = LS.get('cache:' + S.user.id, null);
+  S.data = cached;
+  // 1) Jahan: always open the encrypted seed (rebuilt from the Healthzilla sheet tabs: Daily, Sleep, Weight, Workouts, Meals, HealthMetrics + labs)
+  let sd = null;
+  if (isJahan() && LS.get('jkey', '')) { try { sd = await decryptSeed(LS.get('jkey', '')); } catch (er) { console.warn('seed', er); } }
+  // 2) live sheet via Apps Script (when config.js api is set). Its rows win; the seed keeps labs.
+  let live = null;
+  try { const j = await api('getData'); if (j.ok) { live = j; S.user = { ...S.user, ...j.profile }; LS.set('user', S.user); } }
+  catch (e) { if (e.pin) { S.pin = ''; LS.del('pin:' + S.user.id); return pickProfile(true); } }
+  const local = (cached?.metrics || []).filter(m => String(m.source || '').startsWith('upload') || m.source === 'manual');
+  const mk = m => m.date + '|' + m.metric;
+  if (sd || live) {
+    const base = { sessions: [], sets: [], meals: [], goals: [], metrics: [], workouts: [], photos: [], devices: [], ...(cached || {}) };
+    S.data = { ...base, ...(sd || {}), ...(live || {}),
+      labs: sd?.labs || live?.labs || base.labs || [],
+      metrics: byKey([...(sd?.metrics || []), ...local, ...(live?.metrics || [])], mk),
+      meals: live ? (live.meals || []) : byKey([...(sd?.meals || []), ...(base.meals || [])], m => m.meal_id || JSON.stringify(m)),
+      workouts: live?.workouts || sd?.workouts || base.workouts || [],
+      sessions: live ? (live.sessions || []) : (base.sessions || []), sets: live ? (live.sets || []) : (base.sets || []),
+      goals: (live?.goals?.length ? live.goals : sd?.goals) || base.goals || [],
+      sheetMeta: live ? { ...(sd?.sheetMeta || {}), live: true } : (sd?.sheetMeta || null) };
+    cacheSave();
+  }
   // merge in local-only (queued) sessions/meals so history is complete offline
-  try { const j = await api('getData'); if (j.ok) { S.data = j; S.user = { ...S.user, ...j.profile }; LS.set('user', S.user); cacheSave(); } }
-  catch (e) { if (e.pin) { S.pin = ''; LS.del('pin:' + S.user.id); return pickProfile(true); }
-    if (isJahan() && LS.get('jkey', '')) { try { const sd = await decryptSeed(LS.get('jkey', '')); const d = S.data || { sessions: [], sets: [], meals: [] }; S.data = { sessions: d.sessions || [], sets: d.sets || [], meals: d.meals || [], ...sd, metrics: [...sd.metrics, ...((d.metrics || []).filter(m => String(m.source || '').startsWith('upload') || m.source === 'manual'))] }; cacheSave(); } catch (er) { console.warn('seed', er); } } }
   const q = LS.get('q:' + S.user.id, []);
   for (const it of q) { const d = D(); if (it.action === 'saveSession' && !d.sessions.some(s => s.session_id === it.payload.session.session_id)) { d.sessions.push(it.payload.session); d.sets.push(...it.payload.sets.map(x => ({ ...x, session_id: it.payload.session.session_id }))); } if (it.action === 'addMeal' && !d.meals.some(m => m.meal_id === it.payload.meal.meal_id)) d.meals.push(it.payload.meal); }
   S.data = D();
 }
 
 async function decryptSeed(k) {
-  const j = await (await fetch('seed/jahan.enc.json')).json(), b = x => Uint8Array.from(atob(x), c => c.charCodeAt(0));
+  const j = await (await fetch('seed/jahan.enc.json?v=' + Date.now(), { cache: 'no-store' })).json(), b = x => Uint8Array.from(atob(x), c => c.charCodeAt(0));
   const key = await crypto.subtle.importKey('raw', b(k.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice(0, (4 - k.length % 4) % 4)), 'AES-GCM', false, ['decrypt']);
   return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b(j.iv) }, key, b(j.ct))));
 }
@@ -182,7 +202,15 @@ function snapshot() {
   const meals = D().meals.filter(m => m.date === td), kcal = meals.reduce((a, m) => a + (+m.calories || 0), 0), prot = meals.reduce((a, m) => a + (+m.protein_g || 0), 0);
   const ptarget = isJahan() ? 125 : 0, stepT = isJahan() ? [7000, 7500, 8000, 8000, 8500][Math.min(w, 5) - 1] : 8000;
   const m = { sleep: latest('sleep_h', 2), hrv: latest('hrv_ms', 3), rhr: latest('resting_hr', 3), steps: lastFull('steps'), kcal: lastFull('active_kcal'), weight: latest('weight_kg', 30), vo2: latest('vo2max', 400) };
-  const steps7 = avgMetric('steps', 7), sleep7 = avgMetric('sleep_h', 7), hrv7 = avgMetric('hrv_ms', 7);
+  m.exmin = lastFull('exercise_min'); m.rhr = m.rhr || null;
+  const steps7 = avgMetric('steps', 7), sleep7 = avgMetric('sleep_h', 7), hrv7 = avgMetric('hrv_ms', 7), rhr7 = avgMetric('resting_hr', 7);
+  const wo = (D().workouts || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const wo7 = wo.filter(r => (new Date(td) - new Date(r.date)) / 864e5 <= 7);
+  const wl = D().wellness || {}, wlRows = k => (Array.isArray(wl[k]) ? wl[k] : []).filter(r => r && r.date);
+  const water = wlRows('water').filter(r => r.date === td), prayers = wlRows('prayers').sort((a, b) => b.date.localeCompare(a.date))[0], mood = wlRows('mood').sort((a, b) => b.date.localeCompare(a.date))[0];
+  const allMeals = (D().meals || []).slice().sort((a, b) => String(b.date + b.time).localeCompare(String(a.date + a.time)));
+  const sm = D().sheetMeta || null, dDates = D().metrics.filter(r => /Daily tab|Sleep tab/.test(r.source || '')).map(r => r.date).sort();
+  const prov = sm || dDates.length ? { daily: sm?.latest_full_daily || dDates[dDates.length - 1], dailyAny: sm?.latest_daily, sleep: sm?.latest_sleep, live: !!sm?.live, read: sm?.read_at } : null;
   const wkStart = ymd(new Date(START.getTime() + (w - 1) * 7 * 864e5)), wkDone = new Set(D().sessions.filter(s => s.date >= wkStart && s.date <= td).map(s => s.session_id)).size;
   const sg = suggestion(), finds = [];
   // headline: most useful takeaway first
@@ -211,30 +239,38 @@ function snapshot() {
   const goals = D().goals || [], G = k => goals.find(g => g.key === k);
   if (G('vape')) { const n = daysUntil(G('vape').due || '2026-12-09'); long.push({ i: '🚭', t: 'Vaping phase-out', d: n > 0 ? `${n} days to your ${dPretty(G('vape').due || '2026-12-09')} target. Taper a little each week — you've got this.` : 'Target date reached — keep it up.' }); }
   if (G('bp')) { const n = daysUntil(G('bp').due || '2026-11-23'); long.push({ i: '🩺', t: 'BP cuff check', d: n > 0 ? `Start a 7-day home BP check by ${dPretty(G('bp').due || '2026-11-23')} (${n} days) before Week 4.` : 'Due now: 7 days of home BP readings before Week 4.' }); }
-  return { now, td, w, rc, st, ol, todayK, nx, doneToday, sess, meals, kcal, prot, ptarget, stepT, m, steps7, sleep7, hrv7, wkDone, wkTarget: w <= 2 ? 3 : 4, head, finds, long };
+  return { now, td, w, rc, st, ol, todayK, nx, doneToday, sess, meals, kcal, prot, ptarget, stepT, m, steps7, sleep7, hrv7, rhr7, wo, wo7, water, prayers, mood, allMeals, prov, wkDone, wkTarget: w <= 2 ? 3 : 4, head, finds, long };
+}
+function provLine(x) {
+  if (!x.prov) return isJahan() ? 'Health sheet data not loaded on this phone yet — open your personal Healthzilla link once.' : '';
+  const p = x.prov; return `From your Healthzilla sheet · latest Daily ${p.daily ? dPretty(p.daily) : '–'}${p.dailyAny && p.dailyAny !== p.daily ? ` (${dPretty(p.dailyAny)} partial)` : ''} · Sleep ${p.sleep ? dPretty(p.sleep) : '–'}${p.live ? ' · live' : p.read ? ` · read from sheet ${dPretty(ymd(new Date(p.read)))} ${t12(new Date(p.read))}` : ''}`;
 }
 function snapCard() {
   const x = snapshot();
   return `<div class="card snap"><div class="row"><h3 class="sp">Today's snapshot</h3><a class="small" href="#/snapshot">Full snapshot →</a></div>
     <div class="alert ${x.head.lvl}" style="margin-top:6px"><b>${esc(x.head.t)}</b><div class="small">${esc(x.head.d)}</div></div>
     <div class="grid3">${[['Sleep', x.m.sleep ? x.m.sleep.value.toFixed(1) + ' h' : '–'], ['HRV', x.m.hrv ? fmt(x.m.hrv.value) + ' ms' : '–'], ['Steps', x.m.steps ? fmt(x.m.steps.value) : '–']].map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('')}</div>
-    ${x.finds[0] ? `<div class="small" style="margin-top:6px">${x.finds[0].i} <b>${esc(x.finds[0].t)}</b> — ${esc(x.finds[0].d)}</div>` : ''}</div>`;
+    ${x.finds[0] ? `<div class="small" style="margin-top:6px">${x.finds[0].i} <b>${esc(x.finds[0].t)}</b> — ${esc(x.finds[0].d)}</div>` : ''}
+    ${provLine(x) ? `<div class="small mut" style="margin-top:6px">${esc(provLine(x))}</div>` : ''}</div>`;
 }
 function snapView() {
   const x = snapshot(), mrow = (k, r, u, d = 0) => `<div class="row small" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="sp">${k}</span>${r ? `<b>${fmt(r.value, d)}${u}</b><span class="mut">&nbsp;· ${dPretty(r.date)}</span>` : '<span class="mut">no recent data</span>'}</div>`;
   const li = a => a.map(f => `<div class="row" style="align-items:flex-start;padding:6px 0"><span style="font-size:20px;width:30px">${f.i}</span><div class="sp"><b>${esc(f.t)}</b><div class="small">${esc(f.d)}</div></div></div>`).join('');
-  return `<h1>Daily snapshot</h1><div class="small mut">${x.now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} · updated ${t12(x.now)} · Lahore</div>
+  return `<h1>Daily snapshot</h1><div class="small mut">${x.now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} · updated ${t12(x.now)} · Lahore</div>${provLine(x) ? `<div class="small mut">${esc(provLine(x))}</div>` : ''}
   <div class="alert ${x.head.lvl}" style="margin-top:10px"><b style="font-size:17px">${esc(x.head.t)}</b><div>${esc(x.head.d)}</div>${x.rc.why.length ? `<div class="small mut" style="margin-top:4px">${x.rc.why.map(esc).join(' · ')}</div>` : ''}</div>
   ${x.finds.length ? `<h2>Findings & recommendations</h2><div class="card">${li(x.finds)}</div>` : ''}
-  <h2>Apple Watch (Health Auto Export)</h2><div class="card">
-    ${mrow('Sleep', x.m.sleep, ' h', 1)}${mrow('HRV', x.m.hrv, ' ms')}${mrow('Resting HR', x.m.rhr, ' bpm')}${mrow('Steps (last full day)', x.m.steps, '')}${mrow('Active energy', x.m.kcal, ' kcal')}${mrow('Weight', x.m.weight, ' kg', 1)}${mrow('VO₂ max', x.m.vo2, '', 1)}
+  <h2>Apple Watch · Daily + Sleep tabs</h2><div class="card">
+    ${mrow('Sleep' + (x.m.sleep && /manual/i.test(x.m.sleep.source || '') ? ' (self-reported)' : ''), x.m.sleep, ' h', 1)}${mrow('HRV', x.m.hrv, ' ms')}${mrow('Resting HR', x.m.rhr, ' bpm')}${mrow('Steps (last full day)', x.m.steps, '')}${mrow('Active energy', x.m.kcal, ' kcal')}${mrow('Exercise minutes', x.m.exmin, ' min')}${mrow('Weight', x.m.weight, ' kg', 1)}${mrow('VO₂ max', x.m.vo2, '', 1)}
+    <div class="small" style="margin-top:8px"><b>Recent Apple Watch workouts</b> <span class="mut">(Workouts tab)</span></div>
+    ${x.wo.length ? x.wo.slice(0, 4).map(r => `<div class="row small" style="padding:2px 0"><span class="sp">⌚ ${esc(r.type)}</span><span>${dPretty(r.date)} · ${fmt(r.minutes)} min · ${fmt(r.kcal)} kcal</span></div>`).join('') : '<div class="small mut">None on the sheet yet.</div>'}
+    ${x.wo[0] && /ring/i.test(x.wo[0].type) ? '<div class="small mut">“Exercise (Watch ring)” = the day’s exercise-ring total, not a logged gym session.</div>' : ''}
     <div class="small mut" style="margin-top:6px">Rest-day rule: sleep under 6 h, HRV well below usual, or resting HR up → go lighter or rest.</div></div>
   <h2>Training</h2><div class="card small">
     <div class="row" style="padding:4px 0"><span class="sp">Today (Week ${x.w})</span><b>${x.todayK ? esc(DAYS[x.todayK].name) : hasPlan() ? 'Not a lifting day' : '–'}</b></div>
     ${x.nx ? `<div class="row" style="padding:4px 0"><span class="sp">Next planned</span><b>${esc(DAYS[x.nx.k].name)} · ${dPretty(x.nx.d)}</b></div>` : ''}
     <div class="row" style="padding:4px 0"><span class="sp">This week</span><b>${x.wkDone}/${x.wkTarget} sessions</b></div>
     <div class="row" style="padding:4px 0"><span class="sp">Streak</span><b>${x.st.cur} (best ${x.st.best})</b></div>
-    <div class="row" style="padding:4px 0"><span class="sp">Last workout</span><b>${x.sess[0] ? `${esc(x.sess[0].day_type)} · ${dPretty(x.sess[0].date)}${x.sess[0].clock_in ? ' · ' + t12(x.sess[0].clock_in) : ''}` : 'none logged yet'}</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Last Healthzilla gym session</span><b>${x.sess[0] ? `${esc(x.sess[0].day_type)} · ${dPretty(x.sess[0].date)}${x.sess[0].clock_in ? ' · ' + t12(x.sess[0].clock_in) : ''}` : 'none logged yet'}</b></div>
     ${x.sess.slice(1, 4).map(s => `<div class="row mut" style="padding:2px 0"><span class="sp">${esc(s.day_type)}</span><span>${dPretty(s.date)} · ${hms(s.duration_seconds)}</span></div>`).join('')}
     ${x.ol.length ? x.ol.slice(0, 4).map(o => `<div class="alert ${o.lvl}">${esc(o.msg)}</div>`).join('') : '<div class="mut" style="margin-top:4px">No stalled lifts flagged.</div>'}
     <div class="row" style="margin-top:8px"><a class="btn sm pri" href="#/train">Train</a><a class="btn sm" href="#/plan">Plan PDF</a></div></div>
@@ -242,14 +278,20 @@ function snapView() {
     <div class="row" style="padding:4px 0"><span class="sp">Calories today</span><b>${x.kcal} kcal</b></div>
     <div class="row" style="padding:4px 0"><span class="sp">Protein today</span><b>${x.prot} g${x.ptarget ? ' / ' + x.ptarget : ''}</b></div>
     <div class="row" style="padding:4px 0"><span class="sp">Meals logged</span><b>${x.meals.length}</b></div>
-    ${x.meals.slice(-3).map(m => `<div class="mut">${t12(m.date + 'T' + m.time)} · ${esc(m.food)} (${m.calories} kcal)</div>`).join('')}
-    <div class="mut" style="margin-top:6px">Carbs/fat, water, prayers and mood aren't logged in Healthzilla yet, so they're not shown here.</div>
+    ${x.meals.slice(-3).map(m => `<div class="mut">${m.time ? t12(m.date + 'T' + m.time) + ' · ' : ''}${esc(m.food)} (${m.calories} kcal)</div>`).join('')}
+    ${!x.meals.length ? `<div class="mut">${x.allMeals[0] ? `Last meal on the sheet: ${esc(x.allMeals[0].food)} · ${dPretty(x.allMeals[0].date)}` : 'No meals on the Meals tab yet.'}</div>` : ''}
+    ${x.water.length ? `<div class="row" style="padding:4px 0"><span class="sp">Water today</span><b>${fmt(x.water.reduce((a, r) => a + (+r.ml || 0), 0))} ml</b></div>` : ''}
+    ${x.prayers ? `<div class="row" style="padding:4px 0"><span class="sp">Prayers (${dPretty(x.prayers.date)})</span><b>${esc(x.prayers.count || '')}/5</b></div>` : ''}
+    ${x.mood ? `<div class="row" style="padding:4px 0"><span class="sp">Mood (${dPretty(x.mood.date)})</span><b>${esc(x.mood.mood)}</b></div>` : ''}
+    ${(() => { const miss = [!x.water.length && 'water', !x.prayers && 'prayers', !x.mood && 'mood'].filter(Boolean); return `<div class="mut" style="margin-top:6px">${['Carbs/fat', ...miss].join(', ').replace(/, ([^,]*)$/, ' and $1')} aren't logged in your sheet yet, so they're not shown here.</div>`; })()}
     <a class="btn sm" style="margin-top:8px" href="#/food">Log a meal</a></div>
   <h2>Weekly picture</h2><div class="card small">
     <div class="row" style="padding:4px 0"><span class="sp">Avg steps (7 days)</span><b>${x.steps7 ? fmt(x.steps7.v) + ` <span class="mut">(${x.steps7.n} days)</span>` : '–'}</b></div>
     <div class="row" style="padding:4px 0"><span class="sp">Avg HRV (7 days)</span><b>${x.hrv7 ? fmt(x.hrv7.v) + ' ms' : '–'}</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Avg resting HR (7 days)</span><b>${x.rhr7 ? fmt(x.rhr7.v) + ' bpm' : '–'}</b></div>
     <div class="row" style="padding:4px 0"><span class="sp">Avg sleep (7 days)</span><b>${x.sleep7 ? x.sleep7.v.toFixed(1) + ' h' : '–'}</b></div><div class="mut">Watch sleep only counts the time it was worn, so short nights may be under-counted.</div>
-    <div class="row" style="padding:4px 0"><span class="sp">Workouts this week</span><b>${x.wkDone}/${x.wkTarget}</b></div></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Healthzilla gym sessions this week</span><b>${x.wkDone}/${x.wkTarget}</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Apple Watch workouts (7 days)</span><b>${x.wo7.length}${x.wo7.length ? ' · ' + fmt(x.wo7.reduce((a, r) => a + (+r.minutes || 0), 0)) + ' min' : ''}</b></div></div>
   ${x.long.length ? `<h2>Longer-term focus</h2><div class="card">${li(x.long)}<div class="small mut">Encouragement, not a diagnosis — follow your doctor's advice.</div></div>` : ''}`;
 };
 
