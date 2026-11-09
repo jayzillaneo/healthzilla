@@ -631,11 +631,11 @@ async function pickProfile(pinFailed) {
     try { const j = await api('verify'); if (!j.ok) throw new Error(j.error); S.user = { ...u, ...j.profile }; } catch (e) { if (e.pin) return pickProfile(true); if (u.id === 'jahan' && !LS.get('jkey', '')) toast('Open your personal Healthzilla link once on this phone to load your health data.', 4000); }
     LS.set('user', S.user); LS.set('pin:' + u.id, pin); boot();
   });
-  $('#mk').onclick = async () => { const n = $('#nn').value.trim(), p = $('#npn').value.trim(); if (!n) return toast('Enter your name'); if (p && !/^\d{4,8}$/.test(p)) return toast('PIN must be 4-8 digits');
+  $('#mk').onclick = async () => { const n = $('#nn').value.trim(), p = $('#npn').value.trim(); if (!n) return toast('Enter your name'); if (!/^\d{4,8}$/.test(p)) return toast('PIN must be 4-8 digits');
     $('#mk').disabled = true;
     const id = (n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 14) || 'friend') + '-' + Math.random().toString(36).slice(2, 6);
     try { const j = await api('createUser', { id, name: n, pin: p }); if (!j.ok) throw new Error(j.error); S.user = j.user; }
-    catch (e) { if (!e.offline) { toast('Could not create profile: ' + e.message); $('#mk').disabled = false; return; }
+    catch (e) { if (!e.offline && e.message !== 'forbidden') { toast('Could not create profile: ' + e.message); $('#mk').disabled = false; return; }
       S.user = { id, name: n, role: 'friend', hasPin: !!p, planStatus: 'needs gym photos', pendingSheet: true }; LS.set('localUsers', [...LS.get('localUsers', []), S.user]);
       LS.set('q:' + id, [{ action: 'createUser', payload: { id, name: n, pin: p }, id: uid() }]);
       LS.set('cache:' + id, { sessions: [], sets: [], meals: [], metrics: [], photos: [], devices: [], goals: [['Train 3x per week', '3 sessions/week', 'active'], ['Protein daily', '1.6 g per kg bodyweight', 'daily'], ['Daily steps', '8,000 steps', 'daily'], ['Sleep', '7+ hours', 'daily']].map(g => ({ goal: g[0], target: g[1], status: g[2], notes: '', due: '', key: '' })) }); }
@@ -653,7 +653,7 @@ async function boot() {
   $('#nav').classList.remove('hidden'); $('#who').classList.remove('hidden'); $('#who').textContent = S.user.name.split(' ')[0] + ' ▾'; $('#who').onclick = () => location.hash = '#/profile';
   render(); await loadData(); if (S.user) { $('#who').textContent = S.user.name.split(' ')[0] + ' ▾'; render(); flush(); }
 }
-{ const m = location.hash.match(/k=([\w-]{16,})/); if (m) { LS.set('jkey', m[1]); history.replaceState(null, '', location.pathname + '#/home'); if (!LS.get('user', null)) LS.set('user', { id: 'jahan', name: 'Jahanzaib (Jahan)', role: 'admin', hasPin: true, planStatus: 'plan ready' }); } }
+{ const m = location.hash.match(/k=([\w-]{16,})/); if (m) { LS.set('jkey', m[1]); history.replaceState(null, '', location.pathname + '#/home'); LS.set('user', { id: 'jahan', name: 'Jahanzaib (Jahan)', role: 'admin', hasPin: true, planStatus: 'plan ready' }); } }
 S.user = LS.get('user', null); if (S.user) S.pin = LS.get('pin:' + S.user.id, '');
 S.user ? boot() : pickProfile();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
