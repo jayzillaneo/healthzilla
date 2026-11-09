@@ -1,0 +1,19 @@
+[
+ {"topic":"Lifting & form","title":"NHS: Physical activity guidelines for adults 19-64","url":"https://www.nhs.uk/live-well/exercise/physical-activity-guidelines-for-adults-aged-19-to-64/","why":"The baseline: 150 min/week activity plus strength work on 2+ days."},
+ {"topic":"Lifting & form","title":"Stronger By Science: Progressive overload strategies","url":"https://www.strongerbyscience.com/progressive-overload-strategies/","why":"How to add weight or reps over time, which is how the overload alerts work."},
+ {"topic":"Lifting & form","title":"Your plan's form videos","url":"#/catalog","why":"Every exercise in your plan with its checked YouTube form video and angle cues."},
+ {"topic":"Cholesterol","title":"NHLBI: Blood cholesterol","url":"https://www.nhlbi.nih.gov/health/blood-cholesterol","why":"What LDL, HDL and non-HDL mean and how they are treated."},
+ {"topic":"Cholesterol","title":"Mayo Clinic: Top 5 lifestyle changes to improve your cholesterol","url":"https://www.mayoclinic.org/diseases-conditions/high-blood-cholesterol/in-depth/reduce-cholesterol/art-20045935","why":"Less saturated fat, more soluble fibre (oats), exercise, quitting nicotine. Matches your LDL goal."},
+ {"topic":"Vitamin D","title":"NIH ODS: Vitamin D fact sheet","url":"https://ods.od.nih.gov/factsheets/VitaminD-Consumer/","why":"Blood level ranges in ng/mL, food sources, safe upper limits."},
+ {"topic":"Vitamin D","title":"NHS: Vitamin D","url":"https://www.nhs.uk/conditions/vitamins-and-minerals/vitamin-d/","why":"Short practical guide to sunlight, food and supplement doses."},
+ {"topic":"Uric acid","title":"Mayo Clinic: Gout diet","url":"https://www.mayoclinic.org/healthy-lifestyle/nutrition-and-healthy-eating/in-depth/gout-diet/art-20048524","why":"Foods that push uric acid up (organ meat, red meat, sugary drinks) and what helps."},
+ {"topic":"Blood pressure","title":"AHA: Understanding blood pressure readings","url":"https://www.heart.org/en/health-topics/high-blood-pressure/understanding-blood-pressure-readings","why":"BP categories for your cuff check before Week 4."},
+ {"topic":"Sleep & HRV","title":"CDC: About sleep","url":"https://www.cdc.gov/sleep/about/index.html","why":"Adults need 7+ hours, plus simple sleep habits."},
+ {"topic":"Sleep & HRV","title":"Cleveland Clinic: Heart rate variability (HRV)","url":"https://my.clevelandclinic.org/health/symptoms/21773-heart-rate-variability-hrv","why":"What HRV means, what lowers it, and why to compare against your own baseline."},
+ {"topic":"Quit vaping","title":"CDC: Vaping and quitting","url":"https://www.cdc.gov/tobacco/e-cigarettes/quitting.html","why":"Quit-plan basics, withdrawal and support options."},
+ {"topic":"Quit vaping","title":"Truth Initiative: EX Program","url":"https://truthinitiative.org/exprogram","why":"Free quit-vaping and quit-smoking program with text support."},
+ {"topic":"Quit vaping","title":"NHS Better Health: Quit smoking","url":"https://www.nhs.uk/better-health/quit-smoking/","why":"Practical tips and the NHS Quit Smoking app for cravings."},
+ {"topic":"Protein & fat loss","title":"Harvard Nutrition Source: Protein","url":"https://nutritionsource.hsph.harvard.edu/what-should-you-eat/protein/","why":"Which protein sources are better for your heart and cholesterol."},
+ {"topic":"Protein & fat loss","title":"ISSN position stand: Protein and exercise","url":"https://link.springer.com/article/10.1186/s12970-017-0177-8","why":"Research summary behind ~1.4-2.0 g/kg/day for people who train (about 110-155 g at 78 kg)."},
+ {"topic":"Protein & fat loss","title":"CDC: Steps for losing weight","url":"https://www.cdc.gov/healthy-weight-growth/losing-weight/index.html","why":"Steady 0.5-1 kg/week, tracking food and sleep, realistic goals."}
+]

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Healthzilla</title>
+<meta name="theme-color" content="#0d0f12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Healthzilla">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header id="top"><div class="brand">HEALTH<span>ZILLA</span></div><div id="sync" class="sync"></div><button id="who" class="who"></button></header>
+<main id="view"></main>
+<div id="timerbar" class="timerbar hidden"></div>
+<nav id="nav">
+  <a href="#/home" data-r="home"><i>⌂</i>Home</a>
+  <a href="#/train" data-r="train"><i>🏋</i>Train</a>
+  <a href="#/food" data-r="food"><i>🍽</i>Food</a>
+  <a href="#/health" data-r="health"><i>♥</i>Health</a>
+  <a href="#/more" data-r="more"><i>☰</i>More</a>
+</nav>
+<div id="modal" class="modal hidden"></div>
+<div id="toast" class="toast hidden"></div>
+<script src="config.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
