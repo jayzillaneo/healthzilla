@@ -166,6 +166,22 @@ function elapsed(a) { const now = a.breakStart ? a.breakStart : Date.now(); retu
 let tickInt = null;
 function startTick() { clearInterval(tickInt); tickInt = setInterval(() => { const a = ACT(); const el = $('#elapsed'); if (a && el) { el.textContent = hms(elapsed(a)); const b = $('#brk'); if (b && a.breakStart) b.textContent = 'On break ' + hms(a.breakSec + (Date.now() - a.breakStart) / 1000); } }, 1000); }
 
+// ---------- 3D character ----------
+const ANIM_OF = { chest_press: 'chest', incline_db: 'chest', smith_incline: 'chest', lat_pulldown: 'pulldown', leg_press45: 'legpress', seated_lp: 'legpress', cable_low_row: 'row', seated_row: 'row', goblet: 'squat', back_squat: 'squat', smith_squat: 'squat', belt_squat: 'squat' };
+const DAY_ANIM = { pushA: 'chest', pullA: 'pulldown', legs: 'legpress', ppb: 'row', leg: 'legpress', back: 'row', pull: 'pulldown' };
+const ANIM_NAMES = { idle: 'Idle', chest: 'Chest press', pulldown: 'Lat pulldown', legpress: 'Leg press', row: 'Cable row', squat: 'Squat' };
+const C3NOTE = 'Stylized 3D body with your real face from your selfie — not a body scan. Drag to rotate.';
+let C3 = null;
+function char3d(el, anim, opts = {}) {
+  if (!el) return;
+  (C3 ||= import('./char3d.js')).then(m => {
+    if (!el.isConnected) return;
+    if (!m.webglOK()) { el.innerHTML = '<div class="small mut" style="padding:20px">This phone/browser has 3D (WebGL) turned off.</div>'; return; }
+    el.innerHTML = ''; el._c = m.mount(el, { anim, ...opts });
+  }).catch(() => { C3 = null; el.innerHTML = '<div class="small mut" style="padding:20px">Could not load the 3D engine — needs an internet connection the first time.</div>'; });
+}
+const c3box = (cls = '') => `<div class="c3 ${cls}"><div class="small mut" style="padding:20px">Loading your 3D character…</div></div>`;
+
 // ---------- views ----------
 const V = {};
 V.home = () => {
@@ -182,6 +198,9 @@ V.home = () => {
     <div class="small">${esc(sg.why)}</div>${sg.hing ? `<div class="small or" style="margin-top:4px">${esc(sg.hing)}</div>` : ''}
     <button class="btn pri big" id="clockin" style="margin-top:12px">▶ Clock in</button>
   </div>`}
+  <div class="card"><div class="row"><h3 class="sp">Your 3D character</h3><a class="small" href="#/character">Full view & moves →</a></div>
+    <div id="homec3">${c3box()}</div>
+    <div class="small mut" style="margin-top:6px">${ANIM_NAMES[homeAnim(a, sg)]} · ${C3NOTE}</div></div>
   <div class="alert ${rc.lvl}"><b>${esc(rc.head)}</b> — ${esc(rc.msg)}${rc.why.length ? `<div class="small mut" style="margin-top:4px">${rc.why.map(esc).join(' · ')}</div>` : ''}</div>
   <div class="grid3">
     <div class="stat"><b>${st.cur}</b><span>streak</span></div><div class="stat"><b>${st.best}</b><span>longest</span></div><div class="stat"><b>${st.thisWeek}/${st.target}</b><span>this week</span></div>
@@ -200,7 +219,9 @@ function weekStrip() {
   return `<div class="week">${Array.from({ length: 7 }, (_, i) => { const d = new Date(ws.getTime() + i * 864e5), ds = ymd(d), k = hasPlan() ? plannedFor(d) : null, done = D().sessions.filter(s => s.date === ds);
     return `<div class="${k ? 'pl' : ''} ${ds === td ? 'td' : ''} ${done.length ? 'dn' : ''}"><span class="mut">${'MTWTFSS'[i]}</span><b>${d.getDate()}</b>${k ? `<span class="or">${DAYS[k].name.replace('Legs + Core', 'Legs').replace('Push-Pull B', 'PPB')}</span>` : '<span class="mut">rest</span>'}${done.length ? '<div class="okc">✓</div>' : ''}</div>`; }).join('')}</div>`;
 }
+function homeAnim(a, sg) { return (a && a.day ? DAY_ANIM[a.day] : sg && DAY_ANIM[sg.key]) || 'idle'; }
 V.home.after = () => {
+  char3d($('#homec3 .c3'), homeAnim(ACT(), suggestion()), { compact: true });
   $('#clockin')?.addEventListener('click', () => { setAct({ id: uid(), clockIn: Date.now(), breakSec: 0, breakStart: 0, day: null, sel: {}, sets: {} }); location.hash = '#/train'; });
   weather(); startTick();
 };
@@ -264,12 +285,14 @@ function openLogger(id) {
   let wv = st.w, rv = st.r;
   const unit = e.unit ? { min: 'Minutes', rounds: 'Rounds', m: 'Metres' }[e.unit] : 'Reps';
   const m = $('#modal'); m.classList.remove('hidden');
+  let c3n = null;
   const draw = () => {
     const sets = ACT().sets[id] || [];
     m.innerHTML = `<div class="sheet"><div class="row"><h2 class="sp" style="margin:0">${esc(e.name)}</h2><button class="btn sm" id="mx">Done</button></div>
     <div class="small mut">${e.floor === 'U' ? 'Upper floor' : '2nd floor'} · ${e.zone} — ${esc(ZONES[e.zone] || '')}</div>
     <div class="alert" style="border-color:var(--or)"><b>Plan:</b> ${esc(rxFor(e, w))}${e.swap ? `<br><b>Swap:</b> ${esc(e.swap)}` : ''}<br><b>Form:</b> ${esc(e.cues)}</div>
-    ${e.likeness ? `<video class="lk" src="videos/likeness/${e.likeness}" playsinline muted loop controls preload="metadata"></video><div class="small mut">Generated clip of you from your photo + gym photos (approximate, not an exact machine scan). Use the form video for exact technique.</div>` : ''}
+    ${ANIM_OF[id] ? `<div id="c3slot"></div><div class="small mut" style="margin-top:4px">3D you · ${ANIM_NAMES[ANIM_OF[id]]} · stylized body, real face, simple stand-in machine. <a href="#/character?a=${ANIM_OF[id]}">Bigger view</a></div>` : ''}
+    ${e.likeness ? `<details style="margin-top:8px"><summary class="small">Photo clip (older 6-second AI video)</summary><video class="lk" src="videos/likeness/${e.likeness}" playsinline muted loop controls preload="none"></video><div class="small mut">AI-generated from your photo + gym photos; approximate.</div></details>` : ''}
     <div class="grid2" style="margin:10px 0"><a class="btn pri" href="${YT(e.vid)}" target="_blank" rel="noopener">▶ Watch form</a>${e.vid2 ? `<a class="btn" href="${YT(e.vid2)}" target="_blank" rel="noopener">▶ Alt video</a>` : `<span></span>`}</div>
     ${prev ? `<div class="small mut">Last time: ${prev.w} kg × ${prev.r} (${dPretty(prev.date)})</div>` : ''}
     <label>Weight (kg)</label><div class="stepper"><button data-w="-2.5">−</button><div class="val" id="wv">${wv}</div><button data-w="2.5">+</button></div>
@@ -279,6 +302,7 @@ function openLogger(id) {
     ${sets.map((s, i) => `<div class="setrow"><span>Set ${i + 1}</span><span>${s.weight_kg} kg × ${s.reps}</span><button class="btn sm ghost" data-del="${i}">✕</button></div>`).join('')}
     <div style="margin-top:10px">${restButtons()}</div>
     <button class="btn ghost w" id="tog" style="margin-top:10px">${ACT().sel[id] ? 'Unmark exercise' : 'Mark done without sets'}</button></div>`;
+    const slot = $('#c3slot'); if (slot) { if (!c3n) { c3n = document.createElement('div'); c3n.className = 'c3 sm'; slot.replaceWith(c3n); char3d(c3n, ANIM_OF[id], { compact: true }); } else slot.replaceWith(c3n); }
     m.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { wv = Math.max(0, +(wv + +b.dataset.w).toFixed(2)); $('#wv').textContent = wv; });
     m.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { rv = Math.max(0, rv + +b.dataset.r); $('#rv').textContent = rv; });
     $('#add').onclick = () => { const a = ACT(); a.sets[id] = a.sets[id] || []; a.sets[id].push({ weight_kg: wv, reps: rv, timestamp: new Date().toISOString() }); a.sel[id] = true; setAct(a); LS.set('last:' + S.user.id + ':' + id, { w: wv, r: rv }); navigator.vibrate?.(40); draw(); toast(`Set saved · rest ${e.role === 'main' ? 90 : 60}s?`); };
@@ -409,9 +433,17 @@ V.goals = () => {
 // ---------- research / more / photos / profile ----------
 V.research = () => `<h1>Research</h1><p class="small mut">Checked links for reading in your free time.</p><div id="rs">Loading…</div>`;
 V.research.after = async () => { const r = await (await fetch('research.json')).json(); const by = {}; r.forEach(x => (by[x.topic] = by[x.topic] || []).push(x)); $('#rs').innerHTML = Object.entries(by).map(([t, a]) => `<h2>${esc(t)}</h2><div class="list">${a.map(x => `<a href="${x.url}" ${x.url.startsWith('#') ? '' : 'target="_blank" rel="noopener"'}><b>${esc(x.title)}</b><div class="small mut">${esc(x.why)}</div></a>`).join('')}</div>`).join(''); };
-V.catalog = () => `<h1>Exercise catalog</h1><p class="small mut">Every exercise with its form video, floor and zone.</p>${EX.map(e => `<div class="card"><div class="row"><h3 class="sp">${esc(e.name)}</h3><span class="tag">${e.floor === 'U' ? 'UF' : '2F'} ${e.zone}</span></div><div class="small mut">${Object.keys(e.days).map(k => DAYS[k].name).join(' · ')}</div><div class="small" style="margin:6px 0">${esc(e.cues)}</div><div class="row"><a class="btn sm pri" target="_blank" rel="noopener" href="${YT(e.vid)}">▶ Watch form</a>${e.vid2 ? `<a class="btn sm" target="_blank" rel="noopener" href="${YT(e.vid2)}">Alt</a>` : ''}${e.likeness ? `<a class="btn sm" href="videos/likeness/${e.likeness}" target="_blank">You (clip)</a>` : ''}</div></div>`).join('')}`;
+V.catalog = () => `<h1>Exercise catalog</h1><p class="small mut">Every exercise with its form video, floor and zone.</p>${EX.map(e => `<div class="card"><div class="row"><h3 class="sp">${esc(e.name)}</h3><span class="tag">${e.floor === 'U' ? 'UF' : '2F'} ${e.zone}</span></div><div class="small mut">${Object.keys(e.days).map(k => DAYS[k].name).join(' · ')}</div><div class="small" style="margin:6px 0">${esc(e.cues)}</div><div class="row"><a class="btn sm pri" target="_blank" rel="noopener" href="${YT(e.vid)}">▶ Watch form</a>${e.vid2 ? `<a class="btn sm" target="_blank" rel="noopener" href="${YT(e.vid2)}">Alt</a>` : ''}${ANIM_OF[e.id] ? `<a class="btn sm" href="#/character?a=${ANIM_OF[e.id]}">3D you</a>` : ''}</div></div>`).join('')}`;
 V.maps = () => `<h1>Gym maps</h1>${hasPlan() ? `<div class="card"><h3>2nd / lower floor</h3><div class="small mut">From the red BOB dummy facing the Champions mural. Push A, Pull A, Push-Pull B and custom arm/back/pull days.</div>${lowerMap()}</div><div class="card"><h3>Upper floor</h3><div class="small mut">From the far-end doors facing the entrance. Legs + Core and custom leg day.</div>${upperMap()}</div>` : noPlanCard()}`;
+V.character = () => { const q = new URLSearchParams(location.hash.split('?')[1] || ''), a0 = ANIM_NAMES[q.get('a')] ? q.get('a') : homeAnim(ACT(), suggestion());
+  return `<h1>Your 3D character</h1>
+  <div class="chips" id="c3chips" style="margin-bottom:10px">${Object.entries(ANIM_NAMES).map(([k, n]) => `<button class="chip ${k === a0 ? 'on' : ''}" data-a="${k}">${n}</button>`).join('')}</div>
+  <div id="bigc3" data-a="${a0}">${c3box('big')}</div>
+  <div class="card small" style="margin-top:10px"><b>What this is:</b> a stylized, animated 3D version of you. The face is your real selfie photo mapped onto the head; the body (about 5'9.5", 78 kg, gym tee and joggers) is built to match you but it is <b>not a body scan</b>, and the machines are simple stand-ins, not copies of your gym's exact equipment. Drag to spin it around. For exact technique, use the <b>▶ Watch form</b> videos in each exercise.</div>`; };
+V.character.after = () => { const box = $('#bigc3 .c3'); char3d(box, $('#bigc3').dataset.a);
+  document.querySelectorAll('#c3chips [data-a]').forEach(b => b.onclick = () => { document.querySelectorAll('#c3chips .chip').forEach(x => x.classList.toggle('on', x === b)); box._c?.set(b.dataset.a); }); };
 V.more = () => `<h1>More</h1><div class="list">
+  <a href="#/character"><b>Your 3D character</b><div class="small mut">Animated 3D you — idle, chest press, lat pulldown, leg press, cable row, squat</div></a>
   <a href="#/history"><b>History</b><div class="small mut">All workouts, sets and weights</div></a>
   <a href="#/goals"><b>Goals</b><div class="small mut">Targets and progress</div></a>
   <a href="#/research"><b>Research</b><div class="small mut">Checked reading links</div></a>

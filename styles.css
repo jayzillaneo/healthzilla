@@ -46,3 +46,7 @@ label{font-size:13px;color:var(--mut);display:block;margin:10px 0 4px}
 a{color:var(--or2)}.list a{display:block;padding:12px;border-radius:12px;background:var(--card2);margin:8px 0;text-decoration:none;color:var(--tx)}
 .bar{height:10px;background:#2b3038;border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--or)}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left}
+.c3{height:300px;border-radius:14px;overflow:hidden;background:radial-gradient(ellipse at 50% 35%,#2a2f37 0%,#12151a 70%);position:relative}
+.c3.big{height:min(62vh,560px)}.c3.sm{height:250px;margin-top:8px}
+.c3 canvas{border-radius:14px}
+details summary{cursor:pointer;color:var(--mut,#9aa3ad);padding:6px 0}
