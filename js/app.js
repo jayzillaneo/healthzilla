@@ -166,6 +166,93 @@ function elapsed(a) { const now = a.breakStart ? a.breakStart : Date.now(); retu
 let tickInt = null;
 function startTick() { clearInterval(tickInt); tickInt = setInterval(() => { const a = ACT(); const el = $('#elapsed'); if (a && el) { el.textContent = hms(elapsed(a)); const b = $('#brk'); if (b && a.breakStart) b.textContent = 'On break ' + hms(a.breakSec + (Date.now() - a.breakStart) / 1000); } }, 1000); }
 
+
+// ---------- daily snapshot ----------
+const PLAN_PDF = 'plan/healthzilla-plan.pdf';
+const fmt = (v, d = 0) => (+v).toLocaleString('en-US', { maximumFractionDigits: d });
+const daysUntil = ds => Math.ceil((new Date(ds + 'T00:00') - new Date(ymd() + 'T00:00')) / 864e5);
+function nextPlanned(from = new Date(), skipToday = true) { for (let i = skipToday ? 1 : 0; i <= 14; i++) { const d = new Date(from.getTime() + i * 864e5), k = plannedFor(d); if (k) return { k, d: ymd(d) }; } return null; }
+function avgMetric(m, days) { const v = D().metrics.filter(x => x.metric === m && !/partial/.test(x.source || '') && (new Date(ymd()) - new Date(x.date)) / 864e5 <= days && x.value !== '').map(x => +x.value); return v.length ? { v: v.reduce((a, b) => a + b, 0) / v.length, n: v.length } : null; }
+function lastFull(m, maxAge = 4) { const r = D().metrics.filter(x => x.metric === m && !/partial/.test(x.source || '') && x.value !== '' && (new Date(ymd()) - new Date(x.date)) / 864e5 <= maxAge).sort((a, b) => String(a.date).localeCompare(String(b.date))); return r.length ? { ...r[r.length - 1], value: +r[r.length - 1].value } : null; }
+function snapshot() {
+  const now = new Date(), td = ymd(now), w = Math.max(weekOf(now), 1), rc = recovery(), st = streaks(), ol = overload();
+  const todayK = hasPlan() ? plannedFor(now) : null, nx = hasPlan() ? nextPlanned(now) : null;
+  const doneToday = D().sessions.filter(s => s.date === td);
+  const sess = D().sessions.slice().sort((a, b) => String(b.clock_in).localeCompare(String(a.clock_in)));
+  const meals = D().meals.filter(m => m.date === td), kcal = meals.reduce((a, m) => a + (+m.calories || 0), 0), prot = meals.reduce((a, m) => a + (+m.protein_g || 0), 0);
+  const ptarget = isJahan() ? 125 : 0, stepT = isJahan() ? [7000, 7500, 8000, 8000, 8500][Math.min(w, 5) - 1] : 8000;
+  const m = { sleep: latest('sleep_h', 2), hrv: latest('hrv_ms', 3), rhr: latest('resting_hr', 3), steps: lastFull('steps'), kcal: lastFull('active_kcal'), weight: latest('weight_kg', 30), vo2: latest('vo2max', 400) };
+  const steps7 = avgMetric('steps', 7), sleep7 = avgMetric('sleep_h', 7), hrv7 = avgMetric('hrv_ms', 7);
+  const wkStart = ymd(new Date(START.getTime() + (w - 1) * 7 * 864e5)), wkDone = new Set(D().sessions.filter(s => s.date >= wkStart && s.date <= td).map(s => s.session_id)).size;
+  const sg = suggestion(), finds = [];
+  // headline: most useful takeaway first
+  let head;
+  if (rc.lvl === 'bad') head = { lvl: 'bad', t: 'Back off today', d: rc.msg };
+  else if (rc.head === 'Go lighter today') head = { lvl: '', t: 'Train, but lighter', d: rc.msg };
+  else if (todayK && !doneToday.length) head = { lvl: 'good', t: `Push today: ${DAYS[todayK].name}`, d: `Week ${w} session is on the plan today. ${rc.lvl === 'good' ? 'Recovery looks fine — follow the target RPE.' : 'Warm up well and go by feel.'}` };
+  else if (doneToday.length) head = { lvl: 'good', t: 'Win: workout done today', d: `${doneToday[0].day_type} logged${doneToday[0].clock_out ? ' at ' + t12(doneToday[0].clock_out) : ''}. Eat your protein and sleep 7+ h.` };
+  else if (hasPlan()) head = { lvl: 'good', t: 'Rest day — keep moving', d: `No lifting planned today.${nx ? ` Next: ${DAYS[nx.k].name} on ${dPretty(nx.d)}.` : ''} A 30-min walk helps hit ${fmt(stepT)} steps.` };
+  else head = { lvl: '', t: 'Pick a session', d: 'Clock in when you get to the gym.' };
+  if (sg.rest && /Missed/.test(sg.why) && !todayK && !doneToday.length) finds.push({ i: '🏋', t: `Optional catch-up: ${DAYS[sg.key].name}`, d: `${sg.why}. Only if you slept OK; otherwise just walk.` });
+  if (m.steps && m.steps.value < stepT) finds.push({ i: '🚶', t: 'Walk more', d: `${fmt(m.steps.value)} steps on ${dPretty(m.steps.date)} vs ${fmt(stepT)} target this week.` });
+  else if (m.steps) finds.push({ i: '✅', t: 'Steps on target', d: `${fmt(m.steps.value)} steps on ${dPretty(m.steps.date)}.` });
+  if (m.sleep && m.sleep.value < 7) finds.push({ i: '😴', t: 'Aim for 7+ h sleep', d: `Last logged ${m.sleep.value.toFixed(1)} h (${dPretty(m.sleep.date)}).` });
+  if (st.cur >= 2) finds.push({ i: '🔥', t: `${st.cur}-session streak`, d: 'Keep the chain going.' });
+  ol.slice(0, 2).forEach(o => finds.push({ i: '📈', t: 'Overload check', d: o.msg }));
+  if (ptarget && (now.getHours() >= 15) && prot < ptarget * 0.5) finds.push({ i: '🍗', t: 'Protein is behind', d: `${prot} g of ${ptarget} g logged so far.` });
+  // longer-term (from his private, encrypted seed only)
+  const labs = D().labs || [], L = n => labs.find(x => x.marker === n), long = [];
+  if (isJahan() && labs.length) {
+    const tc = L('Total Cholesterol'), ldl = L('LDL (direct)'), nh = L('Non-HDL'), vd = L('25-OH Vitamin D'), ua = L('Uric Acid');
+    if (tc || ldl) long.push({ i: '🫀', t: 'Lipids (8 Nov)', d: `Total ${tc?.value}, LDL ${ldl?.value}, non-HDL ${nh?.value} mg/dL. Training, oats/soluble fibre and less fried food all help; fasting retest late Dec.` });
+    if (vd) long.push({ i: '☀️', t: 'Vitamin D', d: `${vd.value} ng/mL — some midday sun; ask your doctor about D3.` });
+    if (ua) long.push({ i: '💧', t: 'Uric acid', d: `${ua.value} mg/dL (high-normal) — water through the day, go easy on sugary drinks.` });
+  }
+  const goals = D().goals || [], G = k => goals.find(g => g.key === k);
+  if (G('vape')) { const n = daysUntil(G('vape').due || '2026-12-09'); long.push({ i: '🚭', t: 'Vaping phase-out', d: n > 0 ? `${n} days to your ${dPretty(G('vape').due || '2026-12-09')} target. Taper a little each week — you've got this.` : 'Target date reached — keep it up.' }); }
+  if (G('bp')) { const n = daysUntil(G('bp').due || '2026-11-23'); long.push({ i: '🩺', t: 'BP cuff check', d: n > 0 ? `Start a 7-day home BP check by ${dPretty(G('bp').due || '2026-11-23')} (${n} days) before Week 4.` : 'Due now: 7 days of home BP readings before Week 4.' }); }
+  return { now, td, w, rc, st, ol, todayK, nx, doneToday, sess, meals, kcal, prot, ptarget, stepT, m, steps7, sleep7, hrv7, wkDone, wkTarget: w <= 2 ? 3 : 4, head, finds, long };
+}
+function snapCard() {
+  const x = snapshot();
+  return `<div class="card snap"><div class="row"><h3 class="sp">Today's snapshot</h3><a class="small" href="#/snapshot">Full snapshot →</a></div>
+    <div class="alert ${x.head.lvl}" style="margin-top:6px"><b>${esc(x.head.t)}</b><div class="small">${esc(x.head.d)}</div></div>
+    <div class="grid3">${[['Sleep', x.m.sleep ? x.m.sleep.value.toFixed(1) + ' h' : '–'], ['HRV', x.m.hrv ? fmt(x.m.hrv.value) + ' ms' : '–'], ['Steps', x.m.steps ? fmt(x.m.steps.value) : '–']].map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('')}</div>
+    ${x.finds[0] ? `<div class="small" style="margin-top:6px">${x.finds[0].i} <b>${esc(x.finds[0].t)}</b> — ${esc(x.finds[0].d)}</div>` : ''}</div>`;
+}
+function snapView() {
+  const x = snapshot(), mrow = (k, r, u, d = 0) => `<div class="row small" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="sp">${k}</span>${r ? `<b>${fmt(r.value, d)}${u}</b><span class="mut">&nbsp;· ${dPretty(r.date)}</span>` : '<span class="mut">no recent data</span>'}</div>`;
+  const li = a => a.map(f => `<div class="row" style="align-items:flex-start;padding:6px 0"><span style="font-size:20px;width:30px">${f.i}</span><div class="sp"><b>${esc(f.t)}</b><div class="small">${esc(f.d)}</div></div></div>`).join('');
+  return `<h1>Daily snapshot</h1><div class="small mut">${x.now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} · updated ${t12(x.now)} · Lahore</div>
+  <div class="alert ${x.head.lvl}" style="margin-top:10px"><b style="font-size:17px">${esc(x.head.t)}</b><div>${esc(x.head.d)}</div>${x.rc.why.length ? `<div class="small mut" style="margin-top:4px">${x.rc.why.map(esc).join(' · ')}</div>` : ''}</div>
+  ${x.finds.length ? `<h2>Findings & recommendations</h2><div class="card">${li(x.finds)}</div>` : ''}
+  <h2>Apple Watch (Health Auto Export)</h2><div class="card">
+    ${mrow('Sleep', x.m.sleep, ' h', 1)}${mrow('HRV', x.m.hrv, ' ms')}${mrow('Resting HR', x.m.rhr, ' bpm')}${mrow('Steps (last full day)', x.m.steps, '')}${mrow('Active energy', x.m.kcal, ' kcal')}${mrow('Weight', x.m.weight, ' kg', 1)}${mrow('VO₂ max', x.m.vo2, '', 1)}
+    <div class="small mut" style="margin-top:6px">Rest-day rule: sleep under 6 h, HRV well below usual, or resting HR up → go lighter or rest.</div></div>
+  <h2>Training</h2><div class="card small">
+    <div class="row" style="padding:4px 0"><span class="sp">Today (Week ${x.w})</span><b>${x.todayK ? esc(DAYS[x.todayK].name) : hasPlan() ? 'Not a lifting day' : '–'}</b></div>
+    ${x.nx ? `<div class="row" style="padding:4px 0"><span class="sp">Next planned</span><b>${esc(DAYS[x.nx.k].name)} · ${dPretty(x.nx.d)}</b></div>` : ''}
+    <div class="row" style="padding:4px 0"><span class="sp">This week</span><b>${x.wkDone}/${x.wkTarget} sessions</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Streak</span><b>${x.st.cur} (best ${x.st.best})</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Last workout</span><b>${x.sess[0] ? `${esc(x.sess[0].day_type)} · ${dPretty(x.sess[0].date)}${x.sess[0].clock_in ? ' · ' + t12(x.sess[0].clock_in) : ''}` : 'none logged yet'}</b></div>
+    ${x.sess.slice(1, 4).map(s => `<div class="row mut" style="padding:2px 0"><span class="sp">${esc(s.day_type)}</span><span>${dPretty(s.date)} · ${hms(s.duration_seconds)}</span></div>`).join('')}
+    ${x.ol.length ? x.ol.slice(0, 4).map(o => `<div class="alert ${o.lvl}">${esc(o.msg)}</div>`).join('') : '<div class="mut" style="margin-top:4px">No stalled lifts flagged.</div>'}
+    <div class="row" style="margin-top:8px"><a class="btn sm pri" href="#/train">Train</a><a class="btn sm" href="#/plan">Plan PDF</a></div></div>
+  <h2>Food & wellness</h2><div class="card small">
+    <div class="row" style="padding:4px 0"><span class="sp">Calories today</span><b>${x.kcal} kcal</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Protein today</span><b>${x.prot} g${x.ptarget ? ' / ' + x.ptarget : ''}</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Meals logged</span><b>${x.meals.length}</b></div>
+    ${x.meals.slice(-3).map(m => `<div class="mut">${t12(m.date + 'T' + m.time)} · ${esc(m.food)} (${m.calories} kcal)</div>`).join('')}
+    <div class="mut" style="margin-top:6px">Carbs/fat, water, prayers and mood aren't logged in Healthzilla yet, so they're not shown here.</div>
+    <a class="btn sm" style="margin-top:8px" href="#/food">Log a meal</a></div>
+  <h2>Weekly picture</h2><div class="card small">
+    <div class="row" style="padding:4px 0"><span class="sp">Avg steps (7 days)</span><b>${x.steps7 ? fmt(x.steps7.v) + ` <span class="mut">(${x.steps7.n} days)</span>` : '–'}</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Avg HRV (7 days)</span><b>${x.hrv7 ? fmt(x.hrv7.v) + ' ms' : '–'}</b></div>
+    <div class="row" style="padding:4px 0"><span class="sp">Avg sleep (7 days)</span><b>${x.sleep7 ? x.sleep7.v.toFixed(1) + ' h' : '–'}</b></div><div class="mut">Watch sleep only counts the time it was worn, so short nights may be under-counted.</div>
+    <div class="row" style="padding:4px 0"><span class="sp">Workouts this week</span><b>${x.wkDone}/${x.wkTarget}</b></div></div>
+  ${x.long.length ? `<h2>Longer-term focus</h2><div class="card">${li(x.long)}<div class="small mut">Encouragement, not a diagnosis — follow your doctor's advice.</div></div>` : ''}`;
+};
+
 // ---------- 3D character ----------
 const ANIM_OF = { chest_press: 'chest', incline_db: 'chest', smith_incline: 'chest', lat_pulldown: 'pulldown', leg_press45: 'legpress', seated_lp: 'legpress', cable_low_row: 'row', seated_row: 'row', goblet: 'squat', back_squat: 'squat', smith_squat: 'squat', belt_squat: 'squat' };
 const DAY_ANIM = { pushA: 'chest', pullA: 'pulldown', legs: 'legpress', ppb: 'row', leg: 'legpress', back: 'row', pull: 'pulldown' };
@@ -184,6 +271,7 @@ const c3box = (cls = '') => `<div class="c3 ${cls}"><div class="small mut" style
 
 // ---------- views ----------
 const V = {};
+V.snapshot = snapView;
 V.home = () => {
   const a = ACT(), sg = suggestion(), st = streaks(), last = D().sessions.slice().sort((x, y) => String(y.clock_in).localeCompare(String(x.clock_in)))[0];
   const rc = recovery(), ol = overload(), pr = prs().slice(0, 3), w = weekOf();
@@ -198,6 +286,7 @@ V.home = () => {
     <div class="small">${esc(sg.why)}</div>${sg.hing ? `<div class="small or" style="margin-top:4px">${esc(sg.hing)}</div>` : ''}
     <button class="btn pri big" id="clockin" style="margin-top:12px">▶ Clock in</button>
   </div>`}
+  ${snapCard()}
   <div class="card"><div class="row"><h3 class="sp">Your 3D character</h3><a class="small" href="#/character">Full view & moves →</a></div>
     <div id="homec3">${c3box()}</div>
     <div class="small mut" style="margin-top:6px">${ANIM_NAMES[homeAnim(a, sg)]} · ${C3NOTE}</div></div>
@@ -212,7 +301,7 @@ V.home = () => {
   ${ol.length ? `<h2>Overload alerts</h2>${ol.slice(0, 4).map(o => `<div class="alert ${o.lvl}">${esc(o.msg)}</div>`).join('')}` : ''}
   ${pr.length ? `<h2>Personal records</h2><div class="card">${pr.map(p => `<div class="row small" style="padding:4px 0"><span class="sp">${esc(p.ex)}</span><b>${p.w} kg × ${p.r}</b><span class="mut">&nbsp;${dPretty(p.date)}</span></div>`).join('')}</div>` : ''}
   <div class="card"><div class="small mut">Last workout</div><div>${last ? `${esc(last.day_type)} · ${dPretty(last.date)} · ${hms(last.duration_seconds)} · ${last.exercise_count} exercises` : 'None yet — clock in to start.'}</div>
-  <div class="row" style="margin-top:10px"><a class="btn sm" href="#/history">History</a><a class="btn sm" href="#/goals">Goals</a><a class="btn sm" href="#/research">Research</a></div></div>`;
+  <div class="row" style="margin-top:10px"><a class="btn sm" href="#/history">History</a><a class="btn sm" href="#/goals">Goals</a><a class="btn sm" href="#/plan">📄 Plan PDF</a><a class="btn sm" href="#/research">Research</a></div></div>`;
 };
 function weekStrip() {
   const w = Math.max(weekOf(), 1), ws = new Date(START.getTime() + (w - 1) * 7 * 864e5), td = ymd();
@@ -260,7 +349,7 @@ function dayPicker(a) {
   const btn = (k, sug) => `<button class="chip ${sug ? 'sug' : ''}" data-day="${k}">${esc(DAYS[k].name)}</button>`;
   return `<div class="card hero"><div class="mut small">Clocked in ${t12(a.clockIn)}</div>
     <h2 style="margin:6px 0">${hasPlan() ? `Aaj plan ke mutabiq: <span class="or">${esc(DAYS[sg.key].name)}</span>` : 'What are you training?'}</h2>
-    <div class="small">${esc(sg.why)}</div>
+    <div class="small">${esc(sg.why)}</div>${hasPlan() ? `<a class="small" href="#/plan">📄 Open plan PDF</a>` : ''}
     ${hasPlan() ? `<button class="btn pri big" data-day="${sg.key}" data-follow="1" style="margin-top:12px">✓ Follow this plan</button>` : ''}</div>
     <h2>${hasPlan() ? 'Or choose another day' : 'Pick a day type'}</h2>
     <div class="card"><div class="small mut">Plan days</div><div class="chips" style="margin:8px 0 14px">${['pushA', 'pullA', 'legs', 'ppb'].map(k => btn(k, k === sg.key)).join('')}</div>
@@ -435,6 +524,15 @@ V.research = () => `<h1>Research</h1><p class="small mut">Checked links for read
 V.research.after = async () => { const r = await (await fetch('research.json')).json(); const by = {}; r.forEach(x => (by[x.topic] = by[x.topic] || []).push(x)); $('#rs').innerHTML = Object.entries(by).map(([t, a]) => `<h2>${esc(t)}</h2><div class="list">${a.map(x => `<a href="${x.url}" ${x.url.startsWith('#') ? '' : 'target="_blank" rel="noopener"'}><b>${esc(x.title)}</b><div class="small mut">${esc(x.why)}</div></a>`).join('')}</div>`).join(''); };
 V.catalog = () => `<h1>Exercise catalog</h1><p class="small mut">Every exercise with its form video, floor and zone.</p>${EX.map(e => `<div class="card"><div class="row"><h3 class="sp">${esc(e.name)}</h3><span class="tag">${e.floor === 'U' ? 'UF' : '2F'} ${e.zone}</span></div><div class="small mut">${Object.keys(e.days).map(k => DAYS[k].name).join(' · ')}</div><div class="small" style="margin:6px 0">${esc(e.cues)}</div><div class="row"><a class="btn sm pri" target="_blank" rel="noopener" href="${YT(e.vid)}">▶ Watch form</a>${e.vid2 ? `<a class="btn sm" target="_blank" rel="noopener" href="${YT(e.vid2)}">Alt</a>` : ''}${ANIM_OF[e.id] ? `<a class="btn sm" href="#/character?a=${ANIM_OF[e.id]}">3D you</a>` : ''}</div></div>`).join('')}`;
 V.maps = () => `<h1>Gym maps</h1>${hasPlan() ? `<div class="card"><h3>2nd / lower floor</h3><div class="small mut">From the red BOB dummy facing the Champions mural. Push A, Pull A, Push-Pull B and custom arm/back/pull days.</div>${lowerMap()}</div><div class="card"><h3>Upper floor</h3><div class="small mut">From the far-end doors facing the entrance. Legs + Core and custom leg day.</div>${upperMap()}</div>` : noPlanCard()}`;
+
+V.plan = () => { const nx = nextPlanned(new Date(), false), url = new URL(PLAN_PDF, location.href).href;
+  return `<h1>Training plan</h1><div class="card hero"><b>Healthzilla · Weeks 1–6</b><div class="small mut">Week 1 started Mon 9 Nov 2026 · Week 7 deload</div>${nx ? `<div class="small" style="margin-top:6px">Next planned: <b class="or">${esc(DAYS[nx.k].name)}</b> · ${dPretty(nx.d)}</div>` : ''}
+  <div class="grid3" style="margin-top:12px"><a class="btn pri" href="${PLAN_PDF}" target="_blank" rel="noopener">📄 View</a><a class="btn" href="${PLAN_PDF}" download="Healthzilla-plan-weeks-1-6.pdf">⬇ Download</a><button class="btn" id="sharepdf">↗ Share</button></div><div class="small mut" id="shareout" style="margin-top:6px"></div></div>
+  <div class="card small"><b>Weeks 1–2</b><div>Mon Push A · Wed Pull A · Fri Legs + Core · (W2: optional Sat Push-Pull B)</div><b style="display:block;margin-top:8px">Weeks 3–6</b><div>Mon Push A · Tue Pull A · Thu Legs + Core · Sat Push-Pull B</div><div class="mut" style="margin-top:6px">Link: ${esc(url)}</div></div>`; };
+V.plan.after = () => { $('#sharepdf').onclick = async () => { const url = new URL(PLAN_PDF, location.href).href, out = $('#shareout');
+  try { if (navigator.canShare) { const f = new File([await (await fetch(PLAN_PDF)).blob()], 'Healthzilla-plan-weeks-1-6.pdf', { type: 'application/pdf' }); if (navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: 'Healthzilla plan' }); return; } }
+    if (navigator.share) { await navigator.share({ title: 'Healthzilla plan (Weeks 1–6)', url }); return; } throw 0; }
+  catch (e) { if (e && e.name === 'AbortError') return; try { await navigator.clipboard.writeText(url); out.textContent = 'Link copied: ' + url; } catch { out.textContent = 'Copy this link: ' + url; } } }; };
 V.character = () => { const q = new URLSearchParams(location.hash.split('?')[1] || ''), a0 = ANIM_NAMES[q.get('a')] ? q.get('a') : homeAnim(ACT(), suggestion());
   return `<h1>Your 3D character</h1>
   <div class="chips" id="c3chips" style="margin-bottom:10px">${Object.entries(ANIM_NAMES).map(([k, n]) => `<button class="chip ${k === a0 ? 'on' : ''}" data-a="${k}">${n}</button>`).join('')}</div>
@@ -443,6 +541,8 @@ V.character = () => { const q = new URLSearchParams(location.hash.split('?')[1] 
 V.character.after = () => { const box = $('#bigc3 .c3'); char3d(box, $('#bigc3').dataset.a);
   document.querySelectorAll('#c3chips [data-a]').forEach(b => b.onclick = () => { document.querySelectorAll('#c3chips .chip').forEach(x => x.classList.toggle('on', x === b)); box._c?.set(b.dataset.a); }); };
 V.more = () => `<h1>More</h1><div class="list">
+  <a href="#/snapshot"><b>Daily snapshot</b><div class="small mut">Today's findings, Watch metrics, training, food, longer-term focus</div></a>
+  <a href="#/plan"><b>Training plan (PDF)</b><div class="small mut">View, download or share Weeks 1–6</div></a>
   <a href="#/character"><b>Your 3D character</b><div class="small mut">Animated 3D you — idle, chest press, lat pulldown, leg press, cable row, squat</div></a>
   <a href="#/history"><b>History</b><div class="small mut">All workouts, sets and weights</div></a>
   <a href="#/goals"><b>Goals</b><div class="small mut">Targets and progress</div></a>
@@ -465,11 +565,12 @@ V.profile.after = () => { $('#switch').onclick = () => pickProfile(); $('#setpin
 
 // ---------- weather ----------
 const WMO = { 0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Cloudy', 45: 'Fog', 48: 'Fog', 51: 'Drizzle', 53: 'Drizzle', 55: 'Drizzle', 61: 'Rain', 63: 'Rain', 65: 'Heavy rain', 71: 'Snow', 80: 'Showers', 81: 'Showers', 82: 'Heavy showers', 95: 'Thunderstorm' };
+const LAHORE = { lat: 31.5204, lon: 74.3587, name: 'Lahore' };
 async function weather() {
   const el = $('#wx'); if (!el) return;
-  const c = LS.get('wx', null); if (c && Date.now() - c.t < 20 * 60e3) return (el.innerHTML = c.h);
-  const go = async (lat, lon, where) => { try { const j = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,apparent_temperature&timezone=auto`)).json(); const cu = j.current; const h = `<b style="font-size:20px;color:var(--tx)">${Math.round(cu.temperature_2m)}°C</b><br>${WMO[cu.weather_code] || ''} · ${cu.relative_humidity_2m}% hum<br>feels ${Math.round(cu.apparent_temperature)}° · ${where}`; LS.set('wx', { t: Date.now(), h }); const e2 = $('#wx'); if (e2) e2.innerHTML = h; } catch { const e2 = $('#wx'); if (e2) e2.textContent = ''; } };
-  if (navigator.geolocation) navigator.geolocation.getCurrentPosition(p => go(p.coords.latitude.toFixed(3), p.coords.longitude.toFixed(3), 'here'), () => go(24.861, 67.010, 'Karachi'), { timeout: 5000, maximumAge: 30 * 60e3 }); else go(24.861, 67.010, 'Karachi');
+  const c = LS.get('wx2', null); if (c && Date.now() - c.t < 20 * 60e3) return (el.innerHTML = c.h);
+  const go = async (lat, lon, where) => { try { const j = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,apparent_temperature&timezone=auto`)).json(); const cu = j.current; const h = `<b style="font-size:20px;color:var(--tx)">${Math.round(cu.temperature_2m)}°C</b><br>${WMO[cu.weather_code] || ''} · ${cu.relative_humidity_2m}% hum<br>feels ${Math.round(cu.apparent_temperature)}° · ${where}`; LS.set('wx2', { t: Date.now(), h }); const e2 = $('#wx'); if (e2) e2.innerHTML = h; } catch { const e2 = $('#wx'); if (e2) e2.textContent = ''; } };
+  go(LAHORE.lat, LAHORE.lon, LAHORE.name); // home city: always Lahore (no device-location prompt)
 }
 
 // ---------- profiles ----------
